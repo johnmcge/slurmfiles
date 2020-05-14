@@ -25,10 +25,8 @@ namespace joblogs
             List<string> ColsOfInterest = LoadColumnsOfInterest();
             WriteHeaderRow(ColsOfInterest);
 
-            //foreach (var jobLogFile in jobLogFiles)
-            //    ProcessFile(jobLogFile, ColsOfInterest);
-
-            ProcessFile(jobLogFiles.FirstOrDefault(), ColsOfInterest);
+            foreach (var jobLogFile in jobLogFiles)
+                ProcessFile(jobLogFile, ColsOfInterest);
         }
 
 
@@ -102,12 +100,10 @@ namespace joblogs
                 sb.Append($"{MemEff}");
                 sb.Append($"{Delimiter}");
 
-                // TBD: compute cpu effeciency
-                //    Compare "TotalCPU" with computed field core-walltime
-                //    core-walltime = (NCPUS * "Elapsed")
-                string corewalltime = ComputeCoreWallTime(thisRec[columnReference["NCPUS"]], thisRec[columnReference["Elapsed"]]);
-                //Console.WriteLine($"corewalltime: {corewalltime}; TotalCPU: {thisRec[columnReference["TotalCPU"]]}; elapsed: {thisRec[columnReference["Elapsed"]]}");
+                // cpu effeciency: Compare "TotalCPU" with computed field core-walltime
+                // core-walltime = (NCPUS * "Elapsed")
 
+                string corewalltime = ComputeCoreWallTime(thisRec[columnReference["NCPUS"]], thisRec[columnReference["Elapsed"]]);
                 double CpuEff = ComputeCPUEffeciency(thisRec[columnReference["TotalCPU"]], corewalltime);
                 sb.Append($"{Math.Round(CpuEff, 2)}");
                 sb.Append($"{Delimiter}");
@@ -141,8 +137,6 @@ namespace joblogs
             sb.Append($"{Environment.NewLine}");
             File.AppendAllText(OutputFile, sb.ToString());
         }
-
-
 
 
         public static bool FilterOutThisRecord(string line, Dictionary<string, int> colReference)
@@ -285,6 +279,8 @@ namespace joblogs
 
         public static void ComputeWeightedEfficiencyRating()
         {
+            // To Be Done: weight job effeciency based on MemEff, CPUEff, ReqMem, ElapsedTime, #cpus requested
+            //
             // ReqMem > 30gb; ReqMem > 100gb
             // cpu's  > 12
         }
@@ -354,21 +350,5 @@ namespace joblogs
             return result;
         }
 
-        // InputFile = @"E:\slurmdata\longleaf_data\jobs\2020-03-08_jobs.csv";
-        // line number 302 in 2020-03-08_jobs.csv
-        // 52100077  (skip 301)  MaxRSS 18028.07, ReqMem = 98304 Mn   seff: 18.34% of 96.00 GB
-        //
-        // slurm log:
-        //   TotalCPU: 20:29:26
-        //   Timelimit: 7-00:00:00
-        //   End:    2020-03-19T02:21:35
-        //   Start:  2020-03-19T01:15:51
-        //           2020-03-19T01:05:44   compute(End - Start)
-        //   Elapsed:           01:05:44
-        //
-        //
-        // seff:
-        //   CPU Utilized: 20:29:26                  ---> TotalCPU
-        //   Eff 93.52% of 21:54:40 core-walltime    ---> core-walltime = (NCPUS * elapsed) = 20 * 01:05:44
     }
 }
