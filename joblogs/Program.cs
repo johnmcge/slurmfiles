@@ -11,9 +11,9 @@ namespace joblogs
     // as a .net core console application, this code will run on Windows, Mac, and Linux
     class Program
     {
-        public const string InputFileLocation = @"E:\slurmdata\longleaf_data\jobs\";
-        public const string InputFileExtension = "*.csv";
-        public const string OutputFile = "results.txt";
+        public const string InputFileLocation = "/proj/its/slurmdata/longleaf_data/jobs/";
+        public const string InputFileExtension = "2020-*.csv";
+        public const string OutputFile = "/proj/its/johnmcge/effcalc.txt";
         public const string Delimiter = "|";
         public const int BatchSize = 1000;    // number of rows to hold in memory and process in parallel
 
@@ -317,20 +317,22 @@ namespace joblogs
         }
 
 
-        public static double ConvertTimeStringToHours(string strElapsed)
+        public static double ConvertTimeStringToHours(string timeString)
         {
             double result = 0.0;
 
-            int dashLocation = strElapsed.IndexOf("-");
+            int dashLocation = timeString.IndexOf("-");
             if (dashLocation != -1)
             {
-                string days = strElapsed.Substring(0, dashLocation);
+                string days = timeString.Substring(0, dashLocation);
                 result += int.Parse(days) * 24;
-                strElapsed = strElapsed.Substring(dashLocation + 1);
+                timeString = timeString.Substring(dashLocation + 1);
             }
 
-            string[] parts = strElapsed.Split(":");
-            result += (double)int.Parse(parts[0]) + ((double)int.Parse(parts[1]) / 60) + ((double)int.Parse(parts[2]) / 3600);
+            string[] parts = timeString.Split(":");
+            if (parts.Length > 2)
+                result += (double)int.Parse(parts[0]) + ((double)int.Parse(parts[1]) / 60) + ((double)int.Parse(parts[2]) / 3600);
+
             return result;
         }
         public static string ConvertHoursToTimeString(double hrs)
