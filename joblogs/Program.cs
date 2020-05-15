@@ -12,16 +12,19 @@ namespace joblogs
     class Program
     {
         public const string InputFileLocation = "/proj/its/slurmdata/longleaf_data/jobs/";
-        public const string InputFileExtension = "2020-*.csv";
-        public const string OutputFile = "/proj/its/johnmcge/effcalc.txt";
+        public const string InputFileNameMask = "2020-*.csv";
+        public const string OutputFile = "/proj/its/johnmcge/out1.txt";
+
         public const string Delimiter = "|";
         public const int BatchSize = 1000;    // number of rows to hold in memory and process in parallel
 
+        public static Dictionary<string, int> PartitionMaxReqMem = new Dictionary<string, int>();
 
         static void Main(string[] args)
         {
-            var jobLogFiles = Directory.EnumerateFiles(InputFileLocation, InputFileExtension, SearchOption.TopDirectoryOnly);
+            var jobLogFiles = Directory.EnumerateFiles(InputFileLocation, InputFileNameMask, SearchOption.TopDirectoryOnly);
 
+            SetupPartitionInfo();
             List<string> ColsOfInterest = LoadColumnsOfInterest();
             WriteHeaderRow(ColsOfInterest);
 
@@ -87,8 +90,17 @@ namespace joblogs
                     sb.Append($"{Delimiter}");
                 }
 
-                // memory effeciency = (MaxRSS / ReqMem) * 100
-                // ReqMem field inlcudes unit, must be stripped and possibly converted
+                // CPUEffeciency: Compare "TotalCPU" with computed field core-walltime; core-walltime = (NCPUS * "Elapsed")
+                int ncpus = int.Parse(thisRec[columnReference["NCPUS"]]);
+                double hrsElapsed = ConvertTimeStringToHours(thisRec[columnReference["Elapsed"]]);
+                double hrsCoresElapsed = hrsElapsed * ncpus;
+
+                string corewalltime = ConvertHoursToTimeString(hrsCoresElapsed);
+                double CpuEff = ComputeCPUEffeciency(thisRec[columnReference["TotalCPU"]], corewalltime);
+                sb.Append($"{Math.Round(CpuEff, 2)}");
+                sb.Append($"{Delimiter}");
+
+                // MemEffeciency:  (MaxRSS / ReqMem) * 100;  ReqMem field inlcudes unit, must be stripped and possibly converted
                 string str_ReqMem = thisRec[columnReference["ReqMem"]];
                 int ReqMem = int.Parse(str_ReqMem.Substring(0, (str_ReqMem.Length - 2)));
                 string ReqMemUnits = str_ReqMem.Substring(str_ReqMem.Length - 2);
@@ -96,16 +108,13 @@ namespace joblogs
                     ReqMem *= int.Parse(thisRec[columnReference["NCPUS"]]);
 
                 float MaxRSS = float.Parse(thisRec[columnReference["MaxRSS"]]);
-                float MemEff = (float)Math.Round(((MaxRSS / ReqMem) * 100), 2);
+                double MemEff = (double)Math.Round(((MaxRSS / ReqMem) * 100), 2);
                 sb.Append($"{MemEff}");
                 sb.Append($"{Delimiter}");
 
-                // cpu effeciency: Compare "TotalCPU" with computed field core-walltime
-                // core-walltime = (NCPUS * "Elapsed")
-
-                string corewalltime = ComputeCoreWallTime(thisRec[columnReference["NCPUS"]], thisRec[columnReference["Elapsed"]]);
-                double CpuEff = ComputeCPUEffeciency(thisRec[columnReference["TotalCPU"]], corewalltime);
-                sb.Append($"{Math.Round(CpuEff, 2)}");
+                // WeightedMemEffeciency
+                double weightedMemEff = ComputeWeightedMemEfficiency(MemEff, CpuEff, hrsElapsed, ReqMem, ncpus, thisRec[columnReference["Partition"]]);
+                sb.Append($"{Math.Round(weightedMemEff, 2)}");
                 sb.Append($"{Delimiter}");
 
                 cb.Add(sb.ToString());
@@ -128,10 +137,13 @@ namespace joblogs
                 sb.Append($"{Delimiter}");
             }
 
+            sb.Append($"CPUEffeciency");
+            sb.Append($"{Delimiter}");
+
             sb.Append($"MemEffeciency");
             sb.Append($"{Delimiter}");
 
-            sb.Append($"CPUEffeciency");
+            sb.Append($"WeightedMemEffeciency");
             sb.Append($"{Delimiter}");
 
             sb.Append($"{Environment.NewLine}");
@@ -141,19 +153,20 @@ namespace joblogs
 
         public static bool FilterOutThisRecord(string line, Dictionary<string, int> colReference)
         {
-            // This contains all logic that would cause one to ignore a particular line from the job log data
+            // All logic that would cause one to ignore a particular line from the job log data
 
             var thisRec = line.Split(Delimiter);
             int ReqMemThreshold = 3096;
 
-
             // filter unwanted job states
-            if (thisRec[colReference["State"]] == "RUNNING" || thisRec[colReference["State"]] == "SUSPENDED")
+            if (thisRec[colReference["State"]] == "RUNNING" || 
+                thisRec[colReference["State"]] == "SUSPENDED" ||
+                thisRec[colReference["State"]] == "OUT_OF_MEMORY")
                 return true;
 
-            // commented out this block since partitions are easily filtered during analysis phase
-            // if (thisRec[colReference["Partition"]] == "webportal" || thisRec[colReference["Partition"]] == "ms")
-            //   return true;
+            // filter out partitions for which we do not have a max ReqMem configured
+            if (!PartitionMaxReqMem.ContainsKey(thisRec[colReference["Partition"]]))
+               return true;
 
             // filter out records where elapsed time is < 5 minutes
             string elapsed = thisRec[colReference["Elapsed"]];
@@ -241,48 +254,46 @@ namespace joblogs
                 // there is at least one ColumnOfInterest not found in the file; unexpected 
                 Console.WriteLine($"{diff} columns of interest were not found in {fileName}. The following were found:");
                 foreach (var item in dict)
-                {
-                    Console.WriteLine($"   {item.Key}:{item.Value}");
-                }
+                    Console.WriteLine($" {item.Key}:{item.Value}");
             }
 
             return dict;
         }
 
 
-        public static List<string> LoadColumnsOfInterest()
+        public static double ComputeWeightedMemEfficiency(double memeff, double cpueff, double hrselapsed, int reqmem, int ncpus, string partition)
         {
-            // this list also defines the format of the output file. 
-            List<string> lst = new List<string>();
+            double requestedButUnusedMem = ((100.0 - memeff) / 100.0) * reqmem;
+            double requestedButUnusedMemN = requestedButUnusedMem / (double)PartitionMaxReqMem[partition];   // normalized by max allowable 
 
-            lst.Add("User");
-            lst.Add("Account");
-            lst.Add("JobID");
-            lst.Add("Partition");
-            lst.Add("State");
+            double elapsedN = hrselapsed / 264.0;          // 264 = 11*24 => 11 days max runtime
+            double ncpusN = ncpus / 256;                   // 256 = max requestable cpus
 
-            lst.Add("MaxRSS");
-            lst.Add("ReqMem");
+            double w1 = 0.5; // reqmem
+            double w2 = 0.3; // elapsed
+            double w3 = 0.2; // ncpus
 
-            lst.Add("ReqCPUS");
-            lst.Add("NCPUS");
+            // double weightedMemEff = memeff * (1 - (w1 * requestedButUnusedMemN) + (w2 * elapsedN) + (w3 * ncpusN));
 
-            lst.Add("TotalCPU");
-            lst.Add("Elapsed");
+            double multiplier = (w1 * requestedButUnusedMemN) + (w2 * elapsedN) + (w3 * ncpusN);
 
-            lst.Add("Timelimit");
-            //lst.Add("Submit");
-            //lst.Add("Start");
+            // extra penalty zone, for ReqMem > 30, 100 gb and ncpus > 12
+            // pctPenalty must not add up to more than 1
 
-            return lst;
-        }
+            double pctPenalty = 0.0;  
+            if (reqmem > 30000)
+                pctPenalty += 0.10;
 
-        public static void ComputeWeightedEfficiencyRating()
-        {
-            // To Be Done: weight job effeciency based on MemEff, CPUEff, ReqMem, ElapsedTime, #cpus requested
-            //
-            // ReqMem > 30gb; ReqMem > 100gb
-            // cpu's  > 12
+            if (reqmem > 100000)
+                pctPenalty += 0.40;
+
+            if (ncpus > 12)
+                pctPenalty += 0.25;
+
+            multiplier += (1 - multiplier) * pctPenalty;
+
+
+            return (memeff * (1 - multiplier));
         }
 
 
@@ -300,20 +311,6 @@ namespace joblogs
             double hrsTotalCPU = ConvertTimeStringToHours(totalcpu);
             double hrsCoreWallTime = ConvertTimeStringToHours(corewalltime);
             return ((hrsTotalCPU / hrsCoreWallTime) * 100);
-        }
-
-        public static string ComputeCoreWallTime(string ncpusInput, string elapsedInput)
-        {
-            // elapsedInput will be in form of:  HH:MM:SS  or  D-HH:MM:SS
-            
-            int ncpus = int.Parse(ncpusInput);
-
-            if (ncpus == 1)
-                return elapsedInput;
-
-            double hrs = ConvertTimeStringToHours(elapsedInput);
-            hrs *= ncpus;
-            return ConvertHoursToTimeString(hrs);
         }
 
 
@@ -352,5 +349,46 @@ namespace joblogs
             return result;
         }
 
+
+        public static List<string> LoadColumnsOfInterest()
+        {
+            // this list also defines the format of the output file. 
+            List<string> lst = new List<string>();
+
+            lst.Add("User");
+            lst.Add("Account");
+            lst.Add("JobID");
+            lst.Add("Partition");
+            lst.Add("State");
+
+            lst.Add("MaxRSS");
+            lst.Add("ReqMem");
+
+            lst.Add("ReqCPUS");
+            lst.Add("NCPUS");
+
+            lst.Add("TotalCPU");
+            lst.Add("Elapsed");
+
+            lst.Add("Timelimit");
+            //lst.Add("Submit");
+            //lst.Add("Start");
+
+            return lst;
+        }
+
+        public static void SetupPartitionInfo()
+        {
+            // we neeed max allowed memory per partition to normalize ReqMem as a percentage of what is available to be requested
+            // if a partition is Not listed here, all jobs from that parition will be skipped
+
+            PartitionMaxReqMem.Add("general", 80000);        //     80 gb
+            PartitionMaxReqMem.Add("general_big", 750000);   //    750 gb
+            PartitionMaxReqMem.Add("hov", 750000);           //    750 gb
+            PartitionMaxReqMem.Add("snp", 750000);           //    750 gb
+            PartitionMaxReqMem.Add("spill", 241000);         //    241 gb
+            PartitionMaxReqMem.Add("bigmem", 3041000);       //  3,041 gb
+            PartitionMaxReqMem.Add("interact", 128000);      //    128 gb
+        }
     }
 }
