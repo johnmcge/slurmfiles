@@ -13,12 +13,17 @@ namespace joblogs
     {
         public const string InputFileLocation = "/proj/its/slurmdata/longleaf_data/jobs/";
         public const string InputFileNameMask = "2020-*.csv";
-        public const string OutputFile = "/proj/its/johnmcge/out1.txt";
+        public const string OutputFile = "/proj/its/johnmcge/out3.txt";
 
         public const string Delimiter = "|";
         public const int BatchSize = 1000;    // number of rows to hold in memory and process in parallel
 
         public static Dictionary<string, int> PartitionMaxReqMem = new Dictionary<string, int>();
+
+
+        //public const string InputFileLocation = @"E:\slurmdata\longleaf_data\jobs";
+        //public const string OutputFile = @"C:\Code\Longleaf\out1.txt";
+
 
         static void Main(string[] args)
         {
@@ -55,7 +60,7 @@ namespace joblogs
                         WorkSet.Add(line);
                         if ((counter % BatchSize) == 0)
                         {
-                            ProcessWorkSet(WorkSet, ColumnReference);
+                            ProcessWorkSet(WorkSet, ColumnReference, ColsOfInterest);
                             WorkSet.Clear();
                         }
                         counter++;
@@ -66,17 +71,16 @@ namespace joblogs
             }
 
             // catch remaining records in WorkSet
-            ProcessWorkSet(WorkSet, ColumnReference);
+            ProcessWorkSet(WorkSet, ColumnReference, ColsOfInterest);
             WorkSet.Clear();
 
             Console.WriteLine($"{filteredRecords} records filtered from {fileName}");
         }
 
 
-        public static void ProcessWorkSet(List<string> workset, Dictionary<string, int> columnReference)
+        public static void ProcessWorkSet(List<string> workset, Dictionary<string, int> colRef, List<string> colsOfInterest)
         {
             ConcurrentBag<string> cb = new ConcurrentBag<string>();
-            List<string> colsOfInterest = LoadColumnsOfInterest();
 
             Parallel.ForEach((workset), (line) =>
             {
@@ -86,36 +90,45 @@ namespace joblogs
                 // straight copy for the fieldsOfInterest
                 foreach (var item in colsOfInterest)
                 {
-                    sb.Append($"{thisRec[columnReference[item]]}");
+                    sb.Append($"{thisRec[colRef[item]]}");
                     sb.Append($"{Delimiter}");
                 }
 
                 // CPUEffeciency: Compare "TotalCPU" with computed field core-walltime; core-walltime = (NCPUS * "Elapsed")
-                int ncpus = int.Parse(thisRec[columnReference["NCPUS"]]);
-                double hrsElapsed = ConvertTimeStringToHours(thisRec[columnReference["Elapsed"]]);
+                int ncpus = int.Parse(thisRec[colRef["NCPUS"]]);
+                double hrsElapsed = ConvertTimeStringToHours(thisRec[colRef["Elapsed"]]);
                 double hrsCoresElapsed = hrsElapsed * ncpus;
 
                 string corewalltime = ConvertHoursToTimeString(hrsCoresElapsed);
-                double CpuEff = ComputeCPUEffeciency(thisRec[columnReference["TotalCPU"]], corewalltime);
+                double CpuEff = ComputeCPUEffeciency(thisRec[colRef["TotalCPU"]], corewalltime);
                 sb.Append($"{Math.Round(CpuEff, 2)}");
                 sb.Append($"{Delimiter}");
 
                 // MemEffeciency:  (MaxRSS / ReqMem) * 100;  ReqMem field inlcudes unit, must be stripped and possibly converted
-                string str_ReqMem = thisRec[columnReference["ReqMem"]];
+                string str_ReqMem = thisRec[colRef["ReqMem"]];
                 int ReqMem = int.Parse(str_ReqMem.Substring(0, (str_ReqMem.Length - 2)));
                 string ReqMemUnits = str_ReqMem.Substring(str_ReqMem.Length - 2);
                 if (ReqMemUnits == "Mc")
-                    ReqMem *= int.Parse(thisRec[columnReference["NCPUS"]]);
+                    ReqMem *= int.Parse(thisRec[colRef["NCPUS"]]);
 
-                float MaxRSS = float.Parse(thisRec[columnReference["MaxRSS"]]);
+                float MaxRSS = float.Parse(thisRec[colRef["MaxRSS"]]);
                 double MemEff = (double)Math.Round(((MaxRSS / ReqMem) * 100), 2);
                 sb.Append($"{MemEff}");
                 sb.Append($"{Delimiter}");
 
                 // WeightedMemEffeciency
-                double weightedMemEff = ComputeWeightedMemEfficiency(MemEff, CpuEff, hrsElapsed, ReqMem, ncpus, thisRec[columnReference["Partition"]]);
+                double weightedMemEff = ComputeWeightedMemEfficiency(MemEff, CpuEff, hrsElapsed, ReqMem, ncpus, thisRec[colRef["Partition"]]);
                 sb.Append($"{Math.Round(weightedMemEff, 2)}");
                 sb.Append($"{Delimiter}");
+
+                // compute GBHours Requested = (ReqMem / 1000) * Elapsed-Hrs
+                double GBHoursReq = (ReqMem / 1000.0) * hrsElapsed;
+                sb.Append($"{(int)(GBHoursReq)}");
+                sb.Append($"{Delimiter}");
+
+                // compute GBHours actually used
+                double GBHoursUsed = (MaxRSS / 1000.0) * hrsElapsed;
+                sb.Append($"{(int)(GBHoursUsed)}");
 
                 cb.Add(sb.ToString());
                 sb.Clear();
@@ -146,12 +159,17 @@ namespace joblogs
             sb.Append($"WeightedMemEffeciency");
             sb.Append($"{Delimiter}");
 
+            sb.Append($"GBHoursRequested");
+            sb.Append($"{Delimiter}");
+
+            sb.Append($"GBHoursUsed");
             sb.Append($"{Environment.NewLine}");
+
             File.AppendAllText(OutputFile, sb.ToString());
         }
 
 
-        public static bool FilterOutThisRecord(string line, Dictionary<string, int> colReference)
+        public static bool FilterOutThisRecord(string line, Dictionary<string, int> colRef)
         {
             // All logic that would cause one to ignore a particular line from the job log data
 
@@ -159,20 +177,20 @@ namespace joblogs
             int ReqMemThreshold = 3096;
 
             // filter unwanted job states
-            if (thisRec[colReference["State"]] == "RUNNING" || 
-                thisRec[colReference["State"]] == "SUSPENDED" ||
-                thisRec[colReference["State"]] == "OUT_OF_MEMORY")
+            if (thisRec[colRef["State"]] == "RUNNING" || 
+                thisRec[colRef["State"]] == "SUSPENDED" ||
+                thisRec[colRef["State"]] == "OUT_OF_MEMORY")
                 return true;
 
             // filter out partitions for which we do not have a max ReqMem configured
-            if (!PartitionMaxReqMem.ContainsKey(thisRec[colReference["Partition"]]))
+            if (!PartitionMaxReqMem.ContainsKey(thisRec[colRef["Partition"]]))
                return true;
 
             // filter out records where elapsed time is < 5 minutes
-            string elapsed = thisRec[colReference["Elapsed"]];
+            string elapsed = thisRec[colRef["Elapsed"]];
             if (elapsed.IndexOf("-") == -1)
             {
-                // ff no "-" found within string, then elapsed time was less than one day
+                // if no "-" found within string, then elapsed time was less than one day
                 string[] hhmmss = elapsed.Split(":");
                 int hh = int.Parse(hhmmss[0]);
                 int mm = int.Parse(hhmmss[1]);
@@ -183,7 +201,7 @@ namespace joblogs
             }
 
             // filter out records where requested memory < ReqMemThreshold
-            string str_ReqMem = thisRec[colReference["ReqMem"]];
+            string str_ReqMem = thisRec[colRef["ReqMem"]];
             if (str_ReqMem.Length < 3)  // some cancelled jobs show as "0n" for ReqMem
                 return true;
 
@@ -201,9 +219,14 @@ namespace joblogs
                 else if (ReqMemUnits == "Mc")
                 {
                     // ReqMem is expressed as memory per core; must multiply by number of cores
-                    int NCPUS = int.Parse(thisRec[colReference["NCPUS"]]);
+                    int NCPUS = int.Parse(thisRec[colRef["NCPUS"]]);
                     if ((ReqMem * NCPUS) < ReqMemThreshold)
                         return true;
+                }
+                else
+                {
+                    Console.WriteLine($"*** unrecognized units for ReqMem. str_ReqMem = {str_ReqMem}");
+                    return true;
                 }
             }
             catch (Exception)
@@ -263,11 +286,15 @@ namespace joblogs
 
         public static double ComputeWeightedMemEfficiency(double memeff, double cpueff, double hrselapsed, int reqmem, int ncpus, string partition)
         {
+            // any job for which memEffeciency is > 89% does not need to be weighted
+            if (memeff > 89.0)
+                return memeff;
+
             double requestedButUnusedMem = ((100.0 - memeff) / 100.0) * reqmem;
             double requestedButUnusedMemN = requestedButUnusedMem / (double)PartitionMaxReqMem[partition];   // normalized by max allowable 
 
-            double elapsedN = hrselapsed / 264.0;          // 264 = 11*24 => 11 days max runtime
-            double ncpusN = ncpus / 256;                   // 256 = max requestable cpus
+            double elapsedN = hrselapsed / 264.0;    // 264 = 11*24 => 11 days max runtime
+            double ncpusN = ncpus / 256;             // 256 = max requestable cpus
 
             double w1 = 0.5; // reqmem
             double w2 = 0.3; // elapsed
@@ -277,21 +304,24 @@ namespace joblogs
 
             double multiplier = (w1 * requestedButUnusedMemN) + (w2 * elapsedN) + (w3 * ncpusN);
 
-            // extra penalty zone, for ReqMem > 30, 100 gb and ncpus > 12
-            // pctPenalty must not add up to more than 1
+            // extra penalty zone for jobs with eff < 0.60
+            if (memeff < 60.0)
+            {
+                double pctPenalty = 0.0;
+                if (reqmem > 30000)
+                    pctPenalty += 0.20;
 
-            double pctPenalty = 0.0;  
-            if (reqmem > 30000)
-                pctPenalty += 0.10;
+                if (reqmem > 100000)
+                    pctPenalty += 0.40;
 
-            if (reqmem > 100000)
-                pctPenalty += 0.40;
+                if (ncpus > 12)
+                    pctPenalty += 0.15;
 
-            if (ncpus > 12)
-                pctPenalty += 0.25;
+                if (ncpus > 40)
+                    pctPenalty += 0.15;
 
-            multiplier += (1 - multiplier) * pctPenalty;
-
+                multiplier += (1 - multiplier) * pctPenalty;
+            }
 
             return (memeff * (1 - multiplier));
         }
