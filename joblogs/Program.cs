@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 
 namespace joblogs
 {
+
     // as a .net core console application, this code will run on Windows, Mac, and Linux
     class Program
     {
