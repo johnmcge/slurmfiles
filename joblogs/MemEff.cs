@@ -18,10 +18,9 @@ namespace joblogs
 
             foreach (var jobLogFile in jobLogFiles)
                 ProcessFile(jobLogFile, cfg);
-
         }
 
-        public static void ProcessFile(string fileName, Configurator cfg)
+        private static void ProcessFile(string fileName, Configurator cfg)
         {
             // get header from file, build dictionary of index locations for 
             // columns of interest for this specific log file
@@ -61,7 +60,7 @@ namespace joblogs
         }
 
 
-        public static void ProcessWorkSet(List<string> workset, Dictionary<string, int> colRef, Configurator cfg)
+        private static void ProcessWorkSet(List<string> workset, Dictionary<string, int> colRef, Configurator cfg)
         {
             ConcurrentBag<string> cb = new ConcurrentBag<string>();
 
@@ -122,7 +121,7 @@ namespace joblogs
             File.AppendAllLines(cfg.OutputFile, cb);
         }
 
-        public static void WriteHeaderRow(Configurator cfg)
+        private static void WriteHeaderRow(Configurator cfg)
         {
             //  ProcessWorkSet() defines the structure of the output data
             //  this header row needs to mirror the structure defined in ProcessWorkSet()
@@ -154,7 +153,7 @@ namespace joblogs
         }
 
 
-        public static bool FilterOutThisRecord(string line, Dictionary<string, int> colRef, Configurator cfg)
+        private static bool FilterOutThisRecord(string line, Dictionary<string, int> colRef, Configurator cfg)
         {
             // All logic that would cause one to ignore a particular line from the job log data
 
@@ -224,7 +223,7 @@ namespace joblogs
         }
 
 
-        public static Dictionary<string, int> GetColumnReferences(Configurator cfg, string fileName)
+        private static Dictionary<string, int> GetColumnReferences(Configurator cfg, string fileName)
         {
             // create a dictionary of just the ColumnsOfInterest, including the index of each of those
             // columns from the header of the current file; so we can directly reference and 

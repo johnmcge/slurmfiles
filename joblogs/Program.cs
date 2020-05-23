@@ -14,6 +14,7 @@ namespace joblogs
         public string InputFileNameMask { get; set; }
         public string OutputLocation { get; set; }
         public string OutputFile { get; set; }
+        public string MemEffFile { get; set; }
         public int BatchSize { get; set; } 
         public string Delimiter { get; set; }
         public List<string> ColsOfInterest { get; set; }
@@ -33,6 +34,7 @@ namespace joblogs
                 cfg.InputLocation = o.InputLocation;
                 cfg.InputFileNameMask = o.FileMask;
                 cfg.OutputLocation = o.OutLocation;
+                cfg.MemEffFile = o.MemEffInputFile;
                 cfg.BatchSize = o.BatchSize;
                 cfg.Delimiter = o.Delimiter;
             });
@@ -47,7 +49,13 @@ namespace joblogs
                     break;
 
                 case "summarystats":
-                    SetOutputFile(cfg, "summStats");
+                    if (!File.Exists(cfg.MemEffFile))
+                    {
+                        Console.WriteLine($"Input memeff file not found: {cfg.MemEffFile}");
+                        return;
+                    }
+                    SetOutputFile(cfg, "summaryStats4MemEff");
+                    SummaryStats.GenerateFile(cfg);
                     break;
 
                 case "test":
