@@ -10,7 +10,7 @@ namespace joblogs
 {
     class MemEff
     {
-        public static void GenerateMemEffFile(Configurator cfg)
+        public static void GenerateFile(Configurator cfg)
         {
             var jobLogFiles = Directory.EnumerateFiles(cfg.InputLocation, cfg.InputFileNameMask, SearchOption.TopDirectoryOnly);
 
@@ -24,7 +24,7 @@ namespace joblogs
         {
             // get header from file, build dictionary of index locations for 
             // columns of interest for this specific log file
-            Dictionary<string, int> ColumnReference = GetColumnReferences(cfg, fileName);
+            Dictionary<string, int> ColumnReference = Util.GetColumnReferences(cfg, fileName);
 
             string line = "";
             int filteredRecords = 0;
@@ -78,10 +78,10 @@ namespace joblogs
 
                 // CPUEffeciency: Compare "TotalCPU" with computed field core-walltime; core-walltime = (NCPUS * "Elapsed")
                 int ncpus = int.Parse(thisRec[colRef["NCPUS"]]);
-                double hrsElapsed = ConvertTimeStringToHours(thisRec[colRef["Elapsed"]]);
+                double hrsElapsed = Util.ConvertTimeStringToHours(thisRec[colRef["Elapsed"]]);
                 double hrsCoresElapsed = hrsElapsed * ncpus;
 
-                string corewalltime = ConvertHoursToTimeString(hrsCoresElapsed);
+                string corewalltime = Util.ConvertHoursToTimeString(hrsCoresElapsed);
                 double CpuEff = ComputeCPUEffeciency(thisRec[colRef["TotalCPU"]], corewalltime);
                 sb.Append($"{Math.Round(CpuEff, 2)}");
                 sb.Append($"{cfg.Delimiter}");
@@ -223,51 +223,6 @@ namespace joblogs
         }
 
 
-        private static Dictionary<string, int> GetColumnReferences(Configurator cfg, string fileName)
-        {
-            // create a dictionary of just the ColumnsOfInterest, including the index of each of those
-            // columns from the header of the current file; so we can directly reference and 
-            // iterate through just the fields of interest
-
-            Dictionary<string, int> dict = new Dictionary<string, int>();
-
-            string line = "";
-            try
-            {
-                using (StreamReader sr = new StreamReader(fileName))
-                {
-                    line = sr.ReadLine();
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"Failed to read header row from file: {fileName}");
-                Console.WriteLine($"{e}");
-                return dict;  // returning null dictionary
-            }
-
-            var columnsInFile = line.Split(cfg.Delimiter);
-
-            foreach (var item in cfg.ColsOfInterest)
-            {
-                int ndx = Array.IndexOf(columnsInFile, item);
-                if (ndx > -1)
-                    dict.Add(item, ndx);
-            }
-
-            int diff = cfg.ColsOfInterest.Count() - dict.Count();
-            if (diff > 0)
-            {
-                // there is at least one ColumnOfInterest not found in the file; unexpected 
-                Console.WriteLine($"{diff} columns of interest were not found in {fileName}. The following were found:");
-                foreach (var item in dict)
-                    Console.WriteLine($" {item.Key}:{item.Value}");
-            }
-
-            return dict;
-        }
-
-
         public static double ComputeWeightedMemEfficiency(double memeff, double cpueff, double hrselapsed, int reqmem, int ncpus, double MaxReqMem4Partition)
         {
             // any job for which memEffeciency is > x% does not need to be weighted, job is considered sufficiently effecient
@@ -322,46 +277,12 @@ namespace joblogs
             if (totalcpu.IndexOf(".") != -1)
                 totalcpu = $"00:{totalcpu.Substring(0, totalcpu.IndexOf("."))}";
 
-            double hrsTotalCPU = ConvertTimeStringToHours(totalcpu);
-            double hrsCoreWallTime = ConvertTimeStringToHours(corewalltime);
+            double hrsTotalCPU = Util.ConvertTimeStringToHours(totalcpu);
+            double hrsCoreWallTime = Util.ConvertTimeStringToHours(corewalltime);
             return ((hrsTotalCPU / hrsCoreWallTime) * 100);
         }
 
 
-        public static double ConvertTimeStringToHours(string timeString)
-        {
-            double result = 0.0;
-
-            int dashLocation = timeString.IndexOf("-");
-            if (dashLocation != -1)
-            {
-                string days = timeString.Substring(0, dashLocation);
-                result += int.Parse(days) * 24;
-                timeString = timeString.Substring(dashLocation + 1);
-            }
-
-            string[] parts = timeString.Split(":");
-            if (parts.Length > 2)
-                result += (double)int.Parse(parts[0]) + ((double)int.Parse(parts[1]) / 60) + ((double)int.Parse(parts[2]) / 3600);
-
-            return result;
-        }
-        public static string ConvertHoursToTimeString(double hrs)
-        {
-            string result = "";
-
-            if (hrs > 24)
-            {
-                int days = (int)(hrs / 24);
-                hrs = hrs - (days * 24);
-                result += $"{days}-";
-            }
-
-            var ts = TimeSpan.FromHours(hrs);
-            result += $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
-
-            return result;
-        }
 
     }
 }
