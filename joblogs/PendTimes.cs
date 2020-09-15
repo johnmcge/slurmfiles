@@ -20,7 +20,9 @@ namespace joblogs
             //foreach (var jobLogFile in jobLogFiles)
             //    ProcessFile(jobLogFile, cfg);
 
-            TestProcessFile(@"C:\Code\Longleaf\testData\2020-04-20_jobs.csv", cfg);
+            //TestProcessFile(@"C:\Code\Longleaf\testData\2020-04-20_jobs.csv", cfg);
+            TestProcessFile(@"E:\code\LongleafData\testData\2020-04-20_jobs.csv", cfg);
+        
         }
 
         private static void ProcessFile(string fileName, Configurator cfg)
